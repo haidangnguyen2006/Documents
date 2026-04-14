@@ -7,15 +7,23 @@ Tài liệu này đi sâu vào kiến trúc, nguyên lý hoạt động, các th
 ## 2. Bản chất cốt lõi (Góc nhìn Architect)
 
 ### 2.1. Vấn đề "Mở kết nối" (Connection Overhead)
-Mỗi connection tới DB là một chi phí (TCP handshake, auth, memory/cursor allocation...). Mở/đóng kết nối cho mỗi request sẽ làm tăng latency và giảm throughput. Connection Pool là pattern để tái sử dụng các kết nối sẵn có.
+Hãy tưởng tượng Database là một hòn đảo, và Backend của bạn là đất liền. Để gửi lệnh SQL sang đảo, bạn phải đóng một chiếc thuyền (TCP/IP handshake, xác thực user/password, cấp phát bộ nhớ).
+* Quá trình "đóng thuyền" này cực kỳ tốn thời gian (có thể mất 20-50ms).
+* Nếu mỗi lần User gọi API, bạn lại "đóng một chiếc thuyền", gửi lệnh xong rồi "phá thuyền đi" -> Hệ thống sẽ cực kỳ chậm chạp và tốn CPU.
 
-### 2.2. HikariCP là gì?
-HikariCP là connection pool mặc định của Spring Boot (kể từ các phiên bản gần đây) và được biết đến nhờ hiệu năng cao, tiêu tốn tài nguyên thấp và latency ổn định. Nó tập trung vào 3 điểm:
-- Đơn giản, ít overhead
-- Thuộc tính cấu hình rõ ràng, mặc định an toàn
-- Tích hợp tốt với Micrometer để export metrics
+### 2.2. Giải pháp: Connection Pool (Hồ chứa kết nối)
+* Thay vì đóng/phá thuyền liên tục, ta đóng sẵn **10 chiếc thuyền** để sẵn ở bến.
+* Có request tới -> Lấy 1 thuyền đi.
+* Đi xong về -> Trả thuyền lại bến cho người khác dùng tiếp.
+* Nếu có 11 request cùng lúc? Request thứ 11 phải đứng đợi đến khi có người trả thuyền. Nếu đợi lâu quá (Timeout) -> Báo lỗi rớt mạng.
 
-### 2.3. Vòng đời một kết nối trong pool
+👉 Trong hệ sinh thái Spring Boot, công cụ quản lý bến thuyền này là **HikariCP** (Connection Pool nhanh nhất thế giới Java hiện tại, được cấu hình làm mặc định).
+
+### 2.3. Tại sao phải tối ưu cấu hình mặc định?
+Mặc định, Spring Boot cho HikariCP `maximum-pool-size = 10` (Chỉ có tối đa 10 kết nối cùng lúc).
+Với một hệ thống cá nhân thì ok, nhưng nếu đem lên Production có 1.000 user online cùng lúc, 10 kết nối là quá ít, dẫn đến nghẽn cổ chai (Bottleneck) ngay lập tức. User sẽ liên tục bị văng lỗi `ConnectionTimeoutException`.
+
+### 2.4. Vòng đời một kết nối trong pool
 1. Pool mở một số kết nối khi khởi động (theo minimum-idle).
 2. Khi ứng dụng cần DB, nó mượn (borrow) một connection từ pool.
 3. Sau khi dùng xong, connection được trả lại (return) vào pool chứ không bị đóng.
