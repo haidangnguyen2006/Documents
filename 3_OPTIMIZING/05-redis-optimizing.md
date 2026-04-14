@@ -26,6 +26,80 @@ User B, C, D gọi GET /users.
 
 Trạng thái Cache Hit (Đã có): Hệ thống lấy thẳng dữ liệu từ Redis trả về luôn (tốc độ vài mili-giây) -> Không ai chạm vào PostgreSQL nữa -> PostgreSQL được giải cứu.
 
+## Diagram luồng hoạt động (Mermaid sequence diagram)
+
+Dưới đây là sơ đồ tuần tự (sequence diagram) bằng Mermaid mô tả các luồng chính khi dùng Redis: Cache Hit, Cache Miss (Cache-Aside), Cache Penetration (cache null), Cache Breakdown (distributed lock) và flow khi ghi dữ liệu (delete cache + delay double delete).
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant C as Controller
+    participant S as Service
+    participant R as Redis
+    participant DB as PostgreSQL
+    participant L as DistributedLock
+
+    %% Cache Hit
+    U->>C: GET /users
+    C->>S: call getUsers()
+    S->>R: GET users:list
+    R-->>S: HIT (cached data)
+    S-->>C: return cached data
+    C-->>U: 200 OK
+
+    %% Cache Miss (Cache-Aside Read)
+    U->>C: GET /users
+    C->>S: call getUsers()
+    S->>R: GET users:list
+    R--x S: MISS
+    S->>DB: SELECT * FROM users
+    DB-->>S: rows
+    S->>R: SET users:list (with TTL)
+    S-->>C: return fresh data
+    C-->>U: 200 OK
+
+    %% Cache Penetration -> Cache Null
+    U->>C: GET /users/999999
+    C->>S: call getUser(999999)
+    S->>R: GET user:999999
+    R--x S: MISS
+    S->>DB: SELECT * FROM users WHERE id=999999
+    DB-->>S: NULL
+    S->>R: SET user:999999 "NULL" EX 60
+    S-->>C: 404 Not Found
+
+    %% Cache Breakdown -> Distributed Lock (one thread fetches)
+    U->>C: GET /product/flash
+    C->>S: call getHotProduct()
+    S->>R: GET product:flash
+    R--x S: MISS
+    S->>L: tryLock(product:flash)
+    alt lock acquired
+        L-->>S: LOCKED
+        S->>DB: SELECT * FROM product WHERE id=flash
+        DB-->>S: product data
+        S->>R: SET product:flash (with TTL)
+        L-->>S: UNLOCK
+        S-->>C: return data
+    else lock not acquired
+        S-->>S: sleep 50ms and retry
+        S->>R: GET product:flash
+        R-->>S: HIT (after writer filled)
+        S-->>C: return data
+    end
+
+    %% Write flow (Cache Aside - Delete + Delay Double Delete)
+    U->>C: PUT /users/1 {name: "Alice"}
+    C->>S: call updateUser(1, payload)
+    S->>DB: UPDATE users SET name='Alice' WHERE id=1
+    DB-->>S: OK
+    S->>R: DEL user:1   %% first delete
+    S-->>S: sleep(500ms)
+    S->>R: DEL user:1   %% second delete (double delete)
+    S-->>C: 200 OK
+    C-->>U: 200 OK
+```
+
 ### 1.3. Khi nào DÙNG và KHÔNG NÊN DÙNG?
 
 ✅ Nên dùng: Những dữ liệu đọc nhiều, ít bị sửa. Trong hệ thống identify-service của bạn, Role và Permission là 2 ứng cử viên hoàn hảo. (Mỗi lần xác thực token, bạn phải check Role/Permission, gọi API liên tục nhưng cả năm trời mới tạo Permission mới 1 lần).
