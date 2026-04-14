@@ -153,9 +153,3 @@ HikariCP là lớp phủ kết nối nhẹ, hiệu năng cao. Việc tối ưu p
 
 ---
 
-Nếu bạn muốn, tôi có thể:
-- (A) Thêm mẫu `docker-compose.yml` để dựng nhanh 1 PostgreSQL + app để thử cấu hình.
-- (B) Viết hướng dẫn nhanh chạy load-test (hey/locust) và kịch bản thu metrics Prometheus.
-
-Chọn phương án bạn muốn tôi tiếp tục triển khai.
-
